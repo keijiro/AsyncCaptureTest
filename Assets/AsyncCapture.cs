@@ -1,8 +1,13 @@
 ﻿using UnityEngine;
-using UnityEngine.Experimental.Rendering;
 using Unity.Collections;
 using System.IO;
 using System.Collections.Generic;
+
+#if UNITY_2018_3_OR_NEWER
+using UnityEngine.Rendering;
+#else
+using UnityEngine.Experimental.Rendering;
+#endif
 
 public class AsyncCapture : MonoBehaviour
 {
