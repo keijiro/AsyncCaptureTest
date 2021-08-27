@@ -1,22 +1,45 @@
-﻿using UnityEngine;
+﻿using Unity.Collections;
+using UnityEngine;
 using UnityEngine.Rendering;
-using System.IO;
-using System.Collections;
 
-public class AsyncCapture : MonoBehaviour
+public sealed class AsyncCapture : MonoBehaviour
 {
-    IEnumerator Start()
+    (RenderTexture grab, RenderTexture flip) _rt;
+    NativeArray<byte> _buffer;
+
+    System.Collections.IEnumerator Start()
     {
+        var (w, h) = (Screen.width, Screen.height);
+
+        _rt.grab = new RenderTexture(w, h, 0);
+        _rt.flip = new RenderTexture(w, h, 0);
+
+        _buffer = new NativeArray<byte>(w * h * 4, Allocator.Persistent,
+                                        NativeArrayOptions.UninitializedMemory);
+
+        var (scale, offs) = (new Vector2(1, -1), new Vector2(0, 1));
+
         while (true)
         {
             yield return new WaitForSeconds(1);
             yield return new WaitForEndOfFrame();
 
-            var rt = RenderTexture.GetTemporary(Screen.width, Screen.height, 0, RenderTextureFormat.ARGB32);
-            ScreenCapture.CaptureScreenshotIntoRenderTexture(rt);
-            AsyncGPUReadback.Request(rt, 0, TextureFormat.ARGB32, OnCompleteReadback);
-            RenderTexture.ReleaseTemporary(rt);
+            ScreenCapture.CaptureScreenshotIntoRenderTexture(_rt.grab);
+            Graphics.Blit(_rt.grab, _rt.flip, scale, offs);
+
+            AsyncGPUReadback.RequestIntoNativeArray
+              (ref _buffer, _rt.flip, 0, OnCompleteReadback);
         }
+    }
+
+    void OnDestroy()
+    {
+        AsyncGPUReadback.WaitAllRequests();
+
+        Destroy(_rt.flip);
+        Destroy(_rt.grab);
+
+        _buffer.Dispose();
     }
 
     void OnCompleteReadback(AsyncGPUReadbackRequest request)
@@ -27,10 +50,10 @@ public class AsyncCapture : MonoBehaviour
             return;
         }
 
-        var tex = new Texture2D(Screen.width, Screen.height, TextureFormat.ARGB32, false);
-        tex.LoadRawTextureData(request.GetData<uint>());
-        tex.Apply();
-        File.WriteAllBytes("test.png", ImageConversion.EncodeToPNG(tex));
-        Destroy(tex);
+        var encoded = ImageConversion.EncodeNativeArrayToPNG
+          (_buffer, _rt.flip.graphicsFormat,
+           (uint)_rt.flip.width, (uint)_rt.flip.height);
+
+        System.IO.File.WriteAllBytes("test.png", encoded.ToArray());
     }
 }
