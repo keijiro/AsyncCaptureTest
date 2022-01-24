@@ -50,7 +50,7 @@ public sealed class AsyncCapture : MonoBehaviour
             return;
         }
 
-        var encoded = ImageConversion.EncodeNativeArrayToPNG
+        using var encoded = ImageConversion.EncodeNativeArrayToPNG
           (_buffer, _rt.flip.graphicsFormat,
            (uint)_rt.flip.width, (uint)_rt.flip.height);
 
