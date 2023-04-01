@@ -1,59 +1,53 @@
 ﻿using Unity.Collections;
 using UnityEngine;
 using UnityEngine.Rendering;
+using OperationCanceledException = System.OperationCanceledException;
 
 public sealed class AsyncCapture : MonoBehaviour
 {
-    (RenderTexture grab, RenderTexture flip) _rt;
-    NativeArray<byte> _buffer;
-
-    System.Collections.IEnumerator Start()
+    async void Start()
     {
         var (w, h) = (Screen.width, Screen.height);
-
-        _rt.grab = new RenderTexture(w, h, 0);
-        _rt.flip = new RenderTexture(w, h, 0);
-
-        _buffer = new NativeArray<byte>(w * h * 4, Allocator.Persistent,
-                                        NativeArrayOptions.UninitializedMemory);
-
         var (scale, offs) = (new Vector2(1, -1), new Vector2(0, 1));
 
-        while (true)
+        var grabRT = new RenderTexture(w, h, 0);
+        var flipRT = new RenderTexture(w, h, 0);
+
+        var buffer = new NativeArray<byte>(w * h * 4, Allocator.Persistent,
+                                           NativeArrayOptions.UninitializedMemory);
+
+        try
         {
-            yield return new WaitForSeconds(1);
-            yield return new WaitForEndOfFrame();
+            for (var cancel = destroyCancellationToken;;)
+            {
+                await Awaitable.WaitForSecondsAsync(1, cancel);
+                await Awaitable.EndOfFrameAsync(cancel);
 
-            ScreenCapture.CaptureScreenshotIntoRenderTexture(_rt.grab);
-            Graphics.Blit(_rt.grab, _rt.flip, scale, offs);
+                ScreenCapture.CaptureScreenshotIntoRenderTexture(grabRT);
+                Graphics.Blit(grabRT, flipRT, scale, offs);
 
-            AsyncGPUReadback.RequestIntoNativeArray
-              (ref _buffer, _rt.flip, 0, OnCompleteReadback);
+                var req = await AsyncGPUReadback.RequestIntoNativeArrayAsync(ref buffer, flipRT, 0);
+
+                if (req.hasError)
+                {
+                    Debug.Log("GPU readback error detected.");
+                    continue;
+                }
+
+                using var encoded = ImageConversion.
+                  EncodeNativeArrayToPNG(buffer, flipRT.graphicsFormat, (uint)w, (uint)h);
+
+                System.IO.File.WriteAllBytes("test.png", encoded.ToArray());
+            }
         }
-    }
-
-    void OnDestroy()
-    {
-        AsyncGPUReadback.WaitAllRequests();
-
-        Destroy(_rt.flip);
-        Destroy(_rt.grab);
-
-        _buffer.Dispose();
-    }
-
-    void OnCompleteReadback(AsyncGPUReadbackRequest request)
-    {
-        if (request.hasError)
+        catch (OperationCanceledException)
         {
-            Debug.Log("GPU readback error detected.");
-            return;
         }
-
-        using var encoded = ImageConversion.EncodeNativeArrayToPNG
-          (_buffer, _rt.flip.graphicsFormat,
-           (uint)_rt.flip.width, (uint)_rt.flip.height);
-
-        System.IO.File.WriteAllBytes("test.png", encoded.ToArray());
+        finally
+        {
+            if (flipRT != null) Destroy(flipRT);
+            if (grabRT != null) Destroy(grabRT);
+            if (buffer.IsCreated) buffer.Dispose();
+        }
     }
 }
