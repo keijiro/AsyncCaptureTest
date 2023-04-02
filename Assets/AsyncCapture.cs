@@ -2,16 +2,23 @@
 using UnityEngine;
 using UnityEngine.Rendering;
 using OperationCanceledException = System.OperationCanceledException;
+using File = System.IO.File;
 
 public sealed class AsyncCapture : MonoBehaviour
 {
+    [SerializeField] string _outputFileName = "Screenshot.png";
+    [SerializeField] float _interval = 1;
+
     async void Start()
     {
+        Application.targetFrameRate = 60;
+
         var (w, h) = (Screen.width, Screen.height);
         var (scale, offs) = (new Vector2(1, -1), new Vector2(0, 1));
 
         var grabRT = new RenderTexture(w, h, 0);
         var flipRT = new RenderTexture(w, h, 0);
+        var rtFormat = flipRT.graphicsFormat;
 
         var buffer = new NativeArray<byte>(w * h * 4, Allocator.Persistent,
                                            NativeArrayOptions.UninitializedMemory);
@@ -20,7 +27,7 @@ public sealed class AsyncCapture : MonoBehaviour
         {
             for (var cancel = destroyCancellationToken;;)
             {
-                await Awaitable.WaitForSecondsAsync(1, cancel);
+                await Awaitable.WaitForSecondsAsync(_interval, cancel);
                 await Awaitable.EndOfFrameAsync(cancel);
 
                 ScreenCapture.CaptureScreenshotIntoRenderTexture(grabRT);
@@ -34,10 +41,14 @@ public sealed class AsyncCapture : MonoBehaviour
                     continue;
                 }
 
-                using var encoded = ImageConversion.
-                  EncodeNativeArrayToPNG(buffer, flipRT.graphicsFormat, (uint)w, (uint)h);
+                await Awaitable.BackgroundThreadAsync();
 
-                System.IO.File.WriteAllBytes("test.png", encoded.ToArray());
+                using var encoded = ImageConversion.
+                  EncodeNativeArrayToPNG(buffer, rtFormat, (uint)w, (uint)h);
+
+                await Awaitable.MainThreadAsync();
+
+                await File.WriteAllBytesAsync(_outputFileName, encoded.ToArray(), cancel);
             }
         }
         catch (OperationCanceledException)
